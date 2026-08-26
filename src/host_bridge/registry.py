@@ -1,27 +1,33 @@
-"""WASM Host API Bridge - Function Registry."""
-from typing import Callable
-from wasmtime import Linker, Store, FuncType, ValType
+"""Whitelisted Host Function Registry (v1 API Contract)."""
 
-def register_host_functions(linker: Linker, store: Store, log_func: Callable) -> None:
-    """
-    Registers authorized host functions into the WASM linker.
+from typing import Callable, Dict
+from src.host_bridge.validator import HostFunctionValidator
 
-    Args:
-        linker (Linker): The Wasmtime linker instance.
-        store (Store): The Wasmtime store managing WASM memory and execution.
-        log_func (Callable): The Python host logging function to bridge.
-    """
-    # Define the WebAssembly function signature: (i32, i32, i32) -> i32
-    # i32 represents standard integer types in WASM boundary
-    log_signature = FuncType(
-        [ValType.i32(), ValType.i32(), ValType.i32()],
-        [ValType.i32()]
-    )
 
-    # Bind the Python function to the "env" module in the WASM guest
-    linker.define_func(
-        "env",
-        "host_log",
-        log_signature,
-        log_func
-    )
+class HostFunctionRegistry:
+    """Manages secure bindings and whitelisted function routing for Wasmtime."""
+
+    def __init__(self) -> None:
+        self._registry: Dict[str, Callable[..., Any]] = {}
+        self._register_v1_defaults()
+
+    def _register_v1_defaults(self) -> None:
+        """Registers approved v1 whitelisted functions with validation wrappers."""
+        self._registry["host_log"] = self.whitelisted_log
+        self._registry["host_get_metric"] = self.whitelisted_get_metric
+
+    def whitelisted_log(self, message: str) -> None:
+        """Whitelisted host logging function with strict string validation."""
+        clean_message = HostFunctionValidator.validate_string(message, max_length=512)
+        print(f"[WasmBox-Guest-Log]: {clean_message}")
+
+    def whitelisted_get_metric(self, code: int) -> int:
+        """Whitelisted metric getter with bounds checking."""
+        valid_code = HostFunctionValidator.validate_integer(code, min_val=0, max_val=99)
+        return valid_code * 42
+
+    def get_function(self, name: str) -> Callable[..., Any]:
+        """Retrieves a whitelisted function or denies execution if unauthorized."""
+        if name not in self._registry:
+            raise PermissionError(f"Access Denied: Function '{name}' is not whitelisted in v1 API.")
+        return self._registry[name]

@@ -1,27 +1,25 @@
-"""WASM Host API Bridge - Input Validation."""
+"""Input validation and type-checking layer for WasmBox host functions."""
 
-def validate_memory_bounds(offset: int, length: int, memory_size: int) -> bool:
-    """
-    Validates that a requested memory read/write falls strictly within the WASM sandbox boundaries.
+from typing import Any, Union
 
-    Args:
-        offset (int): The starting memory pointer offset from the WASM guest.
-        length (int): The number of bytes the guest intends to read/write.
-        memory_size (int): The total allocated size of the WASM linear memory.
 
-    Returns:
-        bool: True if the bounds are secure, False if an out-of-bounds access is attempted.
-    """
-    # Enforce strict type checking for the Python boundary
-    if not isinstance(offset, int) or not isinstance(length, int) or not isinstance(memory_size, int):
-        return False
-    
-    # Prevent negative memory pointers or negative lengths
-    if offset < 0 or length < 0:
-        return False
-        
-    # Prevent buffer overflow attacks
-    if (offset + length) > memory_size:
-        return False
-        
-    return True
+class HostFunctionValidator:
+    """Validates parameters passed from untrusted WASM guest memory to host."""
+
+    @staticmethod
+    def validate_string(value: Any, max_length: int = 256) -> str:
+        """Asserts input is a valid string within safe length constraints."""
+        if not isinstance(value, str):
+            raise TypeError(f"Expected string type, got {type(value).__name__}")
+        if len(value) > max_length:
+            raise ValueError(f"String length exceeds maximum allowed limit of {max_length}")
+        return value
+
+    @staticmethod
+    def validate_integer(value: Any, min_val: int = 0, max_val: int = 1000000) -> int:
+        """Asserts input is an integer within safe numeric bounds."""
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise TypeError(f"Expected integer type, got {type(value).__name__}")
+        if not (min_val <= value <= max_val):
+            raise ValueError(f"Integer value {value} out of safe bounds [{min_val}, {max_val}]")
+        return value
