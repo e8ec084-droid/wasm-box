@@ -2,10 +2,12 @@ from wasmtime import Config, Engine, Module, Store
 
 DEFAULT_FUEL = 10_000
 DEFAULT_MEMORY_LIMIT = 10 * 1024 * 1024  # 10 MB
-
+# Deny-by-default capability policy.
+ALLOW_FILESYSTEM = False
+ALLOW_NETWORK = False
 
 def create_sandbox_engine() -> Engine:
-    """Create a Wasmtime engine with basic execution controls."""
+    """Create a Wasmtime engine with security-first execution controls."""
     config = Config()
 
     # Enable deterministic execution metering.
@@ -14,6 +16,9 @@ def create_sandbox_engine() -> Engine:
     # Keep the WASM native stack bounded.
     config.max_wasm_stack = 512 * 1024
 
+    # Filesystem and network capabilities are intentionally not enabled.
+    # WASI is not configured, so the sandbox has no default host I/O access.
+    
     return Engine(config)
 
 
