@@ -1,10 +1,10 @@
 from wasmtime import Config, Engine, Module, Store
 
 DEFAULT_FUEL = 10_000
-DEFAULT_MEMORY_LIMIT = 10 * 1024 * 1024  # 10 MB
-# Deny-by-default capability policy.
-ALLOW_FILESYSTEM = False
-ALLOW_NETWORK = False
+DEFAULT_MEMORY_LIMIT = 10 * 1024 * 1024
+
+DEFAULT_ALLOW_FILESYSTEM = False
+DEFAULT_ALLOW_NETWORK = False
 
 def create_sandbox_engine() -> Engine:
     """Create a Wasmtime engine with security-first execution controls."""
@@ -18,7 +18,7 @@ def create_sandbox_engine() -> Engine:
 
     # Filesystem and network capabilities are intentionally not enabled.
     # WASI is not configured, so the sandbox has no default host I/O access.
-    
+
     return Engine(config)
 
 
@@ -38,3 +38,10 @@ def create_sandbox_store(engine: Engine) -> Store:
 def compile_module(engine: Engine, wasm_source: str) -> Module:
     """Compile a WASM module using the sandbox engine."""
     return Module(engine, wasm_source)
+
+def get_sandbox_capabilities() -> dict[str, bool]:
+    """Return the default capabilities available to sandboxed plugins."""
+    return {
+        "filesystem": DEFAULT_ALLOW_FILESYSTEM,
+        "network": DEFAULT_ALLOW_NETWORK,
+    }

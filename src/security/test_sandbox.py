@@ -1,4 +1,8 @@
-from sandbox import create_sandbox_engine, create_sandbox_store
+from sandbox import (
+    create_sandbox_engine,
+    create_sandbox_store,
+    get_sandbox_capabilities,
+)
 from wasmtime import Instance, Module
 
 HELLO_WASM = """
@@ -24,6 +28,13 @@ def main() -> None:
     print(f"Normal execution result: {result}")
     print(f"Remaining fuel: {store.get_fuel()}")
 
+    capabilities = get_sandbox_capabilities()
+
+    assert capabilities["filesystem"] is False
+    assert capabilities["network"] is False
+
+    print(f"Filesystem access: {capabilities['filesystem']}")
+    print(f"Network access: {capabilities['network']}")
 
 if __name__ == "__main__":
     main()
