@@ -34,14 +34,13 @@ def create_sandbox_store(engine: Engine) -> Store:
 
     return store
 
-
-def compile_module(engine: Engine, wasm_source: str) -> Module:
-    """Compile a WASM module using the sandbox engine."""
-    return Module(engine, wasm_source)
-
 def get_sandbox_capabilities() -> dict[str, bool]:
     """Return the default capabilities available to sandboxed plugins."""
     return {
         "filesystem": DEFAULT_ALLOW_FILESYSTEM,
         "network": DEFAULT_ALLOW_NETWORK,
     }
+
+def compile_module(engine: Engine, wasm_source: str) -> Module:
+    """Compile a WASM module using the sandbox engine."""
+    return Module(engine, wasm_source)
