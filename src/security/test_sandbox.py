@@ -29,13 +29,15 @@ def main() -> None:
     print(f"Remaining fuel: {store.get_fuel()}")
 
     capabilities = get_sandbox_capabilities()
+
     print(f"Sandbox capabilities: {capabilities}")
 
     assert capabilities["filesystem"] is False
     assert capabilities["network"] is False
 
-    print(f"Filesystem access: {capabilities['filesystem']}")
-    print(f"Network access: {capabilities['network']}")
+    print("Filesystem access: BLOCKED")
+    print("Network access: BLOCKED")
+
 
 if __name__ == "__main__":
     main()
