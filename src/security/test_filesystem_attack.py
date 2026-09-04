@@ -14,10 +14,8 @@ MALICIOUS_WASM = """
 """
 
 
-def main() -> None:
+def test_unauthorized_filesystem_access_is_blocked() -> None:
     capabilities = get_sandbox_capabilities()
-
-    print(f"Sandbox capabilities: {capabilities}")
 
     assert capabilities["filesystem"] is False
 
@@ -27,13 +25,12 @@ def main() -> None:
     try:
         module = compile_module(engine, MALICIOUS_WASM)
         Instance(store, module, [])
-        print("ERROR: filesystem-capable module was instantiated")
-        raise AssertionError("Filesystem capability was not blocked")
-    except WasmtimeError as exc:
-        print("Filesystem access attempt: BLOCKED")
-        print(f"Blocked as expected: {type(exc).__name__}")
+    except WasmtimeError:
+        return
+
+    raise AssertionError("Filesystem capability was not blocked")
 
 
 if __name__ == "__main__":
-    main()
-
+    test_unauthorized_filesystem_access_is_blocked()
+    print("Filesystem access: BLOCKED")
