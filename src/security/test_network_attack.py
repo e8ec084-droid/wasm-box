@@ -14,11 +14,12 @@ MALICIOUS_NETWORK_WASM = """
 """
 
 
-def test_unauthorized_network_access_is_blocked() -> None:
+def test_network_capability_is_denied() -> None:
     capabilities = get_sandbox_capabilities()
-
     assert capabilities["network"] is False
 
+
+def test_unauthorized_network_access_is_blocked() -> None:
     engine = create_sandbox_engine()
     store = create_sandbox_store(engine)
 
@@ -28,9 +29,10 @@ def test_unauthorized_network_access_is_blocked() -> None:
     except WasmtimeError:
         return
 
-    raise AssertionError("Network capability was not blocked")
+    raise AssertionError("Network request was not denied")
 
 
 if __name__ == "__main__":
+    test_network_capability_is_denied()
     test_unauthorized_network_access_is_blocked()
-    print("Network access: BLOCKED")
+    print("Network capability: DENIED")
