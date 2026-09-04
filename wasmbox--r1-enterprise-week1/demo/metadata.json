@@ -1,0 +1,6 @@
+{
+  "name": "WasmBox Core",
+  "description": "Secure Multi-Tenant WebAssembly Plugin Sandbox for untrusted Python execution with strict memory, file system, and network isolation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
