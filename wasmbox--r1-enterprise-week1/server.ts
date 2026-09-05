@@ -238,7 +238,7 @@ print("Server Secrets:", os.environ.get('GEMINI_API_KEY'))`
   });
 
   // ==========================================
-  // Vite Middleware Setup
+  // Vite Middleware Setup 
   // ==========================================
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -258,5 +258,6 @@ print("Server Secrets:", os.environ.get('GEMINI_API_KEY'))`
     console.log(`WasmBox Sandbox Server running on http://localhost:${PORT}`);
   });
 }
+
 
 startServer();
