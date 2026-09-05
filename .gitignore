@@ -5,6 +5,9 @@ runtime/*.sha256sum
 # Compiled plugin output (generated, not source)
 plugins/*/
 
+# Packaged plugin artifacts (generated, not source)
+artifacts/*.wasmboxpkg
+
 # Python
 __pycache__/
 *.pyc
