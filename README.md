@@ -29,7 +29,7 @@ curl -X POST http://127.0.0.1:8000/plugins \
   -d '{"name": "greet", "source": "print(2 + 2)"}'
 curl -O -J http://127.0.0.1:8000/plugins/greet/artifact
 
-# Full test suite (18 tests: Week 1 + Week 2)
+# Full test suite (34 tests: Week 1 + Week 2 + Week 3)
 python3 -m pytest tests/ -v
 ```
 
@@ -41,7 +41,7 @@ Hello from inside the WASM sandbox!
 
 Expected API response:
 ```json
-{"name":"greet","source_sha256":"...","format_version":"1.0","artifact_filename":"greet.wasmboxpkg"}
+{"name":"greet","source_sha256":"...","format_version":"2.0","artifact_filename":"greet.wasmboxpkg","resource_limits":{"max_memory_bytes":33554432,"max_fuel":1000000000,"timeout_ms":50}}
 ```
 
 ## Layout
@@ -68,6 +68,9 @@ docs/                 - toolchain research + pipeline/packaging design docs
   and execute fit together, and what R1/R3/R4 build on top of this.
 - [`docs/06-week2-packaging.md`](docs/06-week2-packaging.md) — the API
   design, the `.wasmboxpkg` artifact format, and structured compiler errors.
+- [`docs/07-week3-resource-limits.md`](docs/07-week3-resource-limits.md) —
+  the `resource_limits` manifest schema and how fuel/memory limits are
+  enforced in the runner.
 
 ## Status: Week 1 (Compiler Engineer track)
 
@@ -84,3 +87,11 @@ docs/                 - toolchain research + pipeline/packaging design docs
 - [x] Wed — `.wasmboxpkg` single-file artifact packaging (`package_artifact`/`unpack_artifact`)
 - [x] Thu — Compiler tested against 4 varied sample scripts (loops, functions, strings, dicts)
 - [x] Fri — Structured compiler error codes (`error_code` on every `PluginValidationError`), surfaced as API 422s
+
+## Status: Week 3 (Resource Constraints track)
+
+- [x] Mon — `resource_limits` block in the manifest (format v2.0); runner enforces fuel + memory limits; `while True:` plugins terminate instead of hanging (see `docs/07-week3-resource-limits.md`)
+- [ ] Tue — Test compiled plugins against limits
+- [ ] Wed — Handle compiler warnings for oversized code
+- [ ] Thu — Regression test compiler changes
+- [ ] Fri — Document limits interface

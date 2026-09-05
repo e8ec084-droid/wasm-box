@@ -42,6 +42,9 @@ app = FastAPI(title="WasmBox Compiler API", version="2.0")
 class CompileRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
     source: str = Field(..., min_length=1)
+    # Week 3: optional per-plugin resource-limit overrides. Semantics (keys,
+    # bounds) are validated by the compiler; defaults apply when omitted.
+    resource_limits: dict[str, int] | None = Field(default=None)
 
 
 class CompileResponse(BaseModel):
@@ -49,6 +52,7 @@ class CompileResponse(BaseModel):
     source_sha256: str
     format_version: str
     artifact_filename: str
+    resource_limits: dict[str, int]
 
 
 @app.post("/plugins", response_model=CompileResponse, status_code=201)
@@ -60,7 +64,12 @@ def compile_plugin_endpoint(req: CompileRequest) -> CompileResponse:
         shutil.rmtree(existing_plugin_dir)
 
     try:
-        plugin = compile_source(req.source.encode("utf-8"), PLUGINS_DIR, req.name)
+        plugin = compile_source(
+            req.source.encode("utf-8"),
+            PLUGINS_DIR,
+            req.name,
+            resource_limits=req.resource_limits,
+        )
     except PluginValidationError as exc:
         raise HTTPException(
             status_code=422,
@@ -74,6 +83,7 @@ def compile_plugin_endpoint(req: CompileRequest) -> CompileResponse:
         source_sha256=plugin.source_sha256,
         format_version=plugin.format_version,
         artifact_filename=artifact_path.name,
+        resource_limits=plugin.resource_limits,
     )
 
 

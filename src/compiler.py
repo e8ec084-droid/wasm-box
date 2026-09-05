@@ -35,8 +35,43 @@ from pathlib import Path
 ENTRYPOINT_FILENAME = "main.py"
 MANIFEST_FILENAME = "manifest.json"
 RUNTIME_ID = "python-3.12.0-wasi"
-PLUGIN_FORMAT_VERSION = "1.0"
+PLUGIN_FORMAT_VERSION = "2.0"  # 2.0: manifest now carries resource_limits (Week 3)
 ARTIFACT_SUFFIX = ".wasmboxpkg"
+
+# ---------------------------------------------------------------------------
+# Week 3: resource limits (see docs/07-week3-resource-limits.md)
+# ---------------------------------------------------------------------------
+# Defaults follow the brief's "Resource Constraints" week: a strict memory cap
+# and a deterministic instruction budget that terminates infinite loops
+# (e.g. `while True: pass`) instead of letting them hang the host.
+#
+# max_memory_bytes: cap on the plugin's WASM linear memory. Measured against
+#   the pinned CPython-3.12-WASI runtime, the interpreter alone uses ~10 MB,
+#   so the brief's literal "10 MB" cap leaves zero room for plugin data (an
+#   8 MB allocation already fails). 32 MB is the smallest power-of-two that
+#   gives real headroom while still stopping memory bombs early.
+# max_fuel: deterministic instruction budget. Interpreter boot + a hello-world
+#   plugin consumes ~250M fuel on the pinned runtime; 1G gives ~4x headroom
+#   while still terminating an infinite loop within ~100 ms of wall time.
+# timeout_ms: declared wall-clock target from the brief (50 ms). Fuel is the
+#   enforcement mechanism today; a wall-clock watchdog (Wasmtime epoch
+#   interruption) is R1's Week 3 follow-up, reading this same field.
+MAX_MEMORY_BYTES = 32 * 1024 * 1024
+MAX_FUEL = 1_000_000_000
+TIMEOUT_MS = 50
+
+DEFAULT_RESOURCE_LIMITS = {
+    "max_memory_bytes": MAX_MEMORY_BYTES,
+    "max_fuel": MAX_FUEL,
+    "timeout_ms": TIMEOUT_MS,
+}
+
+# (min, max) inclusive bounds for each overridable limit.
+RESOURCE_LIMIT_BOUNDS = {
+    "max_memory_bytes": (1 * 1024 * 1024, 4 * 1024 * 1024 * 1024),  # 1 MB .. 4 GB (wasm32 max)
+    "max_fuel": (1, 10**12),
+    "timeout_ms": (1, 60_000),
+}
 
 # Import names that are pointless to allow at parse time: WASI already denies
 # filesystem/network access at the sandbox boundary (that's R3's job in
@@ -78,6 +113,10 @@ class DisallowedImportError(PluginValidationError):
     error_code = "disallowed_import"
 
 
+class ResourceLimitError(PluginValidationError):
+    error_code = "invalid_resource_limits"
+
+
 @dataclass
 class CompiledPlugin:
     name: str
@@ -86,6 +125,39 @@ class CompiledPlugin:
     entrypoint: Path
     manifest_path: Path
     format_version: str = PLUGIN_FORMAT_VERSION
+    resource_limits: dict = None  # type: ignore[assignment]  # set by compile_source
+
+    def __post_init__(self) -> None:
+        if self.resource_limits is None:
+            self.resource_limits = dict(DEFAULT_RESOURCE_LIMITS)
+
+
+def _normalize_resource_limits(limits: dict | None) -> dict:
+    """Merge user-supplied limit overrides over the defaults, validating each.
+
+    Unknown keys, non-integers, and out-of-bounds values raise
+    `ResourceLimitError` so the API can surface them as structured 422s.
+    """
+    merged = dict(DEFAULT_RESOURCE_LIMITS)
+    if not limits:
+        return merged
+
+    unknown = set(limits) - set(RESOURCE_LIMIT_BOUNDS)
+    if unknown:
+        raise ResourceLimitError(f"Unknown resource limit key(s): {sorted(unknown)}")
+
+    for key, value in limits.items():
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ResourceLimitError(
+                f"Resource limit '{key}' must be a positive integer, got {value!r}"
+            )
+        lo, hi = RESOURCE_LIMIT_BOUNDS[key]
+        if not (lo <= value <= hi):
+            raise ResourceLimitError(
+                f"Resource limit '{key}' must be between {lo} and {hi}, got {value}"
+            )
+        merged[key] = value
+    return merged
 
 
 def _static_check(source: str, filename: str) -> ast.AST:
@@ -112,13 +184,23 @@ def _static_check(source: str, filename: str) -> ast.AST:
     return tree
 
 
-def compile_source(source_bytes: bytes, output_dir: Path, plugin_name: str) -> CompiledPlugin:
+def compile_source(
+    source_bytes: bytes,
+    output_dir: Path,
+    plugin_name: str,
+    resource_limits: dict | None = None,
+) -> CompiledPlugin:
     """Validate raw source bytes and package them as a plugin under `output_dir`.
 
     This is the core entrypoint used directly by the Week 2 API (Monday's
     task) — it takes bytes off the wire rather than requiring a file on
     disk, which `compile_plugin` (the Week 1 CLI wrapper) still uses.
+
+    `resource_limits` (Week 3) optionally overrides the per-plugin limits
+    written into the manifest's `resource_limits` block, which the runner
+    enforces at execution time. Defaults apply when omitted.
     """
+    limits = _normalize_resource_limits(resource_limits)
     if len(source_bytes) > MAX_SOURCE_BYTES:
         raise SourceTooLargeError(
             f"Plugin source is {len(source_bytes)} bytes, exceeds {MAX_SOURCE_BYTES} byte limit"
@@ -145,6 +227,7 @@ def compile_source(source_bytes: bytes, output_dir: Path, plugin_name: str) -> C
         "source_sha256": source_hash,
         "runtime": RUNTIME_ID,
         "format_version": PLUGIN_FORMAT_VERSION,
+        "resource_limits": limits,
     }
     manifest_path = plugin_dir / MANIFEST_FILENAME
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
@@ -155,6 +238,7 @@ def compile_source(source_bytes: bytes, output_dir: Path, plugin_name: str) -> C
         source_sha256=source_hash,
         entrypoint=entrypoint,
         manifest_path=manifest_path,
+        resource_limits=limits,
     )
 
 
@@ -199,6 +283,14 @@ def unpack_artifact(artifact_path: Path, output_dir: Path) -> Path:
 
     with zipfile.ZipFile(artifact_path, "r") as zf:
         manifest = json.loads(zf.read(MANIFEST_FILENAME))
+        # Forward-compatibility guard: refuse artifacts produced by a newer
+        # format we don't understand yet. Older formats (e.g. 1.0, without
+        # resource_limits) still unpack fine; the runner applies defaults.
+        version = manifest.get("format_version", PLUGIN_FORMAT_VERSION)
+        if int(version.split(".")[0]) > int(PLUGIN_FORMAT_VERSION.split(".")[0]):
+            raise ValueError(
+                f"Artifact format {version} is newer than supported {PLUGIN_FORMAT_VERSION}"
+            )
         plugin_dir = output_dir / manifest["name"]
         if plugin_dir.exists():
             shutil.rmtree(plugin_dir)
