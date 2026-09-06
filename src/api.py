@@ -1,6 +1,5 @@
-"""
-WasmBox Compiler API
-=====================
+"""WasmBox Compiler API.
+
 Week 2 Monday deliverable: "Build API endpoint accepting raw Python code."
 
 A tenant POSTs plugin source as JSON; we validate + package it
@@ -14,7 +13,8 @@ Run locally:
 
 Endpoints:
     POST /plugins            compile + package a new plugin
-    GET  /plugins/{name}     fetch a previously compiled plugin's manifest
+    GET  /plugins/{name}/artifact  download a compiled artifact
+    GET  /healthz            health check
 """
 
 from __future__ import annotations

@@ -50,6 +50,10 @@ Expected API response:
 src/compiler.py       - validates + packages untrusted source, .wasmboxpkg artifacts
 src/api.py            - FastAPI endpoint wrapping the compiler (Week 2)
 src/runner.py         - loads the shared runtime, executes a plugin sandboxed
+src/host_bridge/      - WASM host API bridge (registry, logger, validator)
+  registry.py         - registers authorized host functions into the WASM linker
+  logger.py           - Python-side logging bridge for WASM guests
+  validator.py        - argument validation helpers for host function calls
 samples/              - example plugin source (hello_world + 4 varied scripts)
 plugins/              - compiled plugin output (gitignored, generated)
 artifacts/            - packaged .wasmboxpkg files (gitignored, generated)
