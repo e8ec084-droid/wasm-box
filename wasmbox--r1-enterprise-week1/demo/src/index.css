@@ -5,6 +5,7 @@
   --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,  monospace;
 }
 
+
 /* Custom subtle clean scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
