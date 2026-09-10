@@ -83,6 +83,11 @@ DISALLOWED_IMPORTS: frozenset[str] = frozenset({"socket", "subprocess", "ctypes"
 
 MAX_SOURCE_BYTES = 256 * 1024  # 256 KB — generous for a plugin, cheap to reject early
 
+# Week 3 (Wed): warn (don't reject) once source exceeds this fraction of the
+# hard byte cap. Kept as a ratio so the warning threshold tracks the cap
+# automatically instead of going stale if MAX_SOURCE_BYTES ever changes.
+SOURCE_SIZE_WARNING_RATIO = 0.8
+
 
 # ---------------------------------------------------------------------------
 # Validation errors — each with a stable error_code for structured API responses
@@ -125,6 +130,24 @@ class ResourceLimitError(PluginValidationError):
 
 
 # ---------------------------------------------------------------------------
+# Compiler warnings — non-fatal notices, unlike errors they don't stop compilation
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CompilerWarning:
+    """A non-fatal compile-time notice surfaced to the plugin author.
+
+    Mirrors the structured `error_code` pattern used by errors: each warning
+    carries a stable `code` plus a human-readable `message`, so callers (the
+    API, R5's frontend) can switch on the code instead of parsing text.
+    """
+
+    code: str
+    message: str
+
+
+# ---------------------------------------------------------------------------
 # Data types
 # ---------------------------------------------------------------------------
 
@@ -140,6 +163,7 @@ class CompiledPlugin:
     manifest_path: Path
     format_version: str = PLUGIN_FORMAT_VERSION
     resource_limits: dict[str, int] = field(default_factory=lambda: dict(DEFAULT_RESOURCE_LIMITS))
+    warnings: list[CompilerWarning] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -297,6 +321,7 @@ def compile_source(
     limits = validate_resource_limits(resource_limits)
 
     _validate_source_size(source_bytes)
+    warnings = _collect_source_warnings(source_bytes)
     source = _decode_source(source_bytes)
     validate_source_syntax_and_imports(source, filename=f"{plugin_name}.py")
 
@@ -312,6 +337,7 @@ def compile_source(
         entrypoint=entrypoint,
         manifest_path=manifest_path,
         resource_limits=limits,
+        warnings=warnings,
     )
 
 
@@ -431,6 +457,36 @@ def _validate_source_size(source_bytes: bytes) -> None:
         )
 
 
+def _collect_source_warnings(source_bytes: bytes) -> list[CompilerWarning]:
+    """Return non-fatal warnings for source that is valid but concerning.
+
+    Called after `_validate_source_size` (which rejects the truly oversized),
+    so this only fires for source that fits — warning the author they're
+    closing in on the cap while compilation still succeeds.
+
+    Args:
+        source_bytes: Raw Python source as bytes.
+
+    Returns:
+        A list of CompilerWarning; empty for source under the warning threshold.
+    """
+    warnings: list[CompilerWarning] = []
+    size = len(source_bytes)
+    warning_threshold = int(MAX_SOURCE_BYTES * SOURCE_SIZE_WARNING_RATIO)
+    if size > warning_threshold:
+        warnings.append(
+            CompilerWarning(
+                code="source_near_size_limit",
+                message=(
+                    f"Plugin source is {size} bytes, above the {warning_threshold} byte "
+                    f"warning threshold ({SOURCE_SIZE_WARNING_RATIO:.0%} of the "
+                    f"{MAX_SOURCE_BYTES} byte hard limit)"
+                ),
+            )
+        )
+    return warnings
+
+
 def _decode_source(source_bytes: bytes) -> str:
     """Decode source bytes as UTF-8, raising EncodingError on failure."""
     try:
@@ -509,6 +565,8 @@ def _main() -> int:
         f"compiled -> {plugin.plugin_dir} "
         f"(sha256={plugin.source_sha256[:12]}...)"
     )
+    for warning in plugin.warnings:
+        print(f"warning [{warning.code}]: {warning.message}", file=sys.stderr)
     return 0
 
 

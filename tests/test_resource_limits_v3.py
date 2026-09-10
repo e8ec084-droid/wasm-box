@@ -156,3 +156,64 @@ def test_memory_bomb_fails_gracefully_without_crashing_host(runner, tmp_path):
 
     assert result.ok is False
     assert "MemoryError" in result.stderr
+
+
+def test_low_custom_fuel_kills_healthy_plugin(runner, tmp_path):
+    # Per-plugin overrides are *enforced*, not just stored: a plugin that runs
+    # fine under the 1G default budget must die under a tiny custom budget.
+    plugin = compile_source(
+        b"print(2 + 2)\n",
+        tmp_path,
+        "fuel_starved",
+        resource_limits={"max_fuel": 1_000_000},
+    )
+
+    result = runner.run(plugin.plugin_dir)
+
+    assert result.limit_hit == "fuel"
+    assert result.ok is False
+    assert result.fuel_consumed == 1_000_000  # budget fully exhausted
+
+
+def test_low_custom_memory_cap_blocks_allocation(runner, tmp_path):
+    # A modest allocation that passes under the 32 MB default cap must fail
+    # under a tight custom cap — proving the memory override is enforced at
+    # runtime, not just written into the manifest.
+    source = b"x = bytearray(8 * 1024 * 1024)\nprint(len(x))\n"
+
+    plugin = compile_source(source, tmp_path, "mem_tight", resource_limits={"max_memory_bytes": 16 * 1024 * 1024})
+    result = runner.run(plugin.plugin_dir)
+
+    assert result.ok is False
+    assert "MemoryError" in result.stderr
+
+
+def test_same_allocation_passes_under_default_cap(runner, tmp_path):
+    # Companion to the test above: the identical source succeeds under the
+    # default 32 MB cap, isolating the custom cap as the thing that bites.
+    source = b"x = bytearray(8 * 1024 * 1024)\nprint(len(x))\n"
+
+    plugin = compile_source(source, tmp_path, "mem_default")
+    result = runner.run(plugin.plugin_dir)
+
+    assert result.ok, f"stderr: {result.stderr}"
+    assert result.stdout == f"{8 * 1024 * 1024}\n"
+    assert result.limit_hit is None
+
+
+def test_artifact_round_trip_enforces_limits(runner, tmp_path):
+    # Full distribution path: compile -> package -> unpack -> run. The limits
+    # must survive packaging and still be enforced by the runner afterwards.
+    plugin = compile_source(
+        b"while True:\n    pass\n",
+        tmp_path / "plugins",
+        "loop_artifact",
+        resource_limits={"max_fuel": 50_000_000},
+    )
+    artifact = package_artifact(plugin.plugin_dir, tmp_path / "artifacts")
+    restored = unpack_artifact(artifact, tmp_path / "restored")
+
+    result = runner.run(restored)
+
+    assert result.limit_hit == "fuel"
+    assert result.ok is False
