@@ -144,3 +144,4 @@ export const LogsView: React.FC<LogsViewProps> = ({
     </div>
   );
 };
+

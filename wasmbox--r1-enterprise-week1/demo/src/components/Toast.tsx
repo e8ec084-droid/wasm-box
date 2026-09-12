@@ -7,6 +7,7 @@ interface ToastProps {
   onClose?: () => void;
 }
 
+
 export const Toast: React.FC<ToastProps> = ({ message, type = 'info' }) => {
   return (
     <div 

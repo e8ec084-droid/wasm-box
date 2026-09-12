@@ -28,6 +28,7 @@ export const INITIAL_MODULES: WasmModuleItem[] = [
   }
 ];
 
+
 export const INITIAL_EXECUTIONS: ExecutionRecord[] = [
   {
     id: '821c9083-cf21-4677-8fef-0243013c0b74',
