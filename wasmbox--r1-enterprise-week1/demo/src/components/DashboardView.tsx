@@ -327,6 +327,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
+    
       {/* Recent Executions Table */}
       <div id="recent-executions-card" className="bg-white border border-[#E5E5E7] rounded-2xl p-8 shadow-xs">
         <div className="flex items-center justify-between pb-4 border-b border-[#E5E5E7] mb-4">
