@@ -1,6 +1,5 @@
-"""
-WasmBox Compiler API
-=====================
+"""WasmBox Compiler API.
+
 Week 2 Monday deliverable: "Build API endpoint accepting raw Python code."
 
 A tenant POSTs plugin source as JSON; we validate + package it
@@ -14,7 +13,8 @@ Run locally:
 
 Endpoints:
     POST /plugins            compile + package a new plugin
-    GET  /plugins/{name}     fetch a previously compiled plugin's manifest
+    GET  /plugins/{name}/artifact  download a compiled artifact
+    GET  /healthz            health check
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 
 from compiler import (
     ARTIFACT_SUFFIX,
+    CompilerWarning,
     PluginValidationError,
     compile_source,
     package_artifact,
@@ -53,6 +54,8 @@ class CompileResponse(BaseModel):
     format_version: str
     artifact_filename: str
     resource_limits: dict[str, int]
+    # Week 3 (Wed): non-fatal compile warnings, e.g. source nearing the size cap.
+    warnings: list[CompilerWarning] = Field(default_factory=list)
 
 
 @app.post("/plugins", response_model=CompileResponse, status_code=201)
@@ -84,6 +87,7 @@ def compile_plugin_endpoint(req: CompileRequest) -> CompileResponse:
         format_version=plugin.format_version,
         artifact_filename=artifact_path.name,
         resource_limits=plugin.resource_limits,
+        warnings=plugin.warnings,
     )
 
 

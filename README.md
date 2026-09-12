@@ -29,7 +29,7 @@ curl -X POST http://127.0.0.1:8000/plugins \
   -d '{"name": "greet", "source": "print(2 + 2)"}'
 curl -O -J http://127.0.0.1:8000/plugins/greet/artifact
 
-# Full test suite (34 tests: Week 1 + Week 2 + Week 3)
+# Full test suite (72 tests: Week 1 + Week 2 + Week 3)
 python3 -m pytest tests/ -v
 ```
 
@@ -50,6 +50,10 @@ Expected API response:
 src/compiler.py       - validates + packages untrusted source, .wasmboxpkg artifacts
 src/api.py            - FastAPI endpoint wrapping the compiler (Week 2)
 src/runner.py         - loads the shared runtime, executes a plugin sandboxed
+src/host_bridge/      - WASM host API bridge (registry, logger, validator)
+  registry.py         - registers authorized host functions into the WASM linker
+  logger.py           - Python-side logging bridge for WASM guests
+  validator.py        - argument validation helpers for host function calls
 samples/              - example plugin source (hello_world + 4 varied scripts)
 plugins/              - compiled plugin output (gitignored, generated)
 artifacts/            - packaged .wasmboxpkg files (gitignored, generated)
@@ -71,6 +75,9 @@ docs/                 - toolchain research + pipeline/packaging design docs
 - [`docs/07-week3-resource-limits.md`](docs/07-week3-resource-limits.md) —
   the `resource_limits` manifest schema and how fuel/memory limits are
   enforced in the runner.
+- [`docs/08-week3-limits-interface.md`](docs/08-week3-limits-interface.md) —
+  the complete Week 3 interface: declaring limits, enforcement, compiler
+  warnings for oversized code, and the API contract.
 
 ## Status: Week 1 (Compiler Engineer track)
 
@@ -91,7 +98,7 @@ docs/                 - toolchain research + pipeline/packaging design docs
 ## Status: Week 3 (Resource Constraints track)
 
 - [x] Mon — `resource_limits` block in the manifest (format v2.0); runner enforces fuel + memory limits; `while True:` plugins terminate instead of hanging (see `docs/07-week3-resource-limits.md`)
-- [ ] Tue — Test compiled plugins against limits
-- [ ] Wed — Handle compiler warnings for oversized code
-- [ ] Thu — Regression test compiler changes
-- [ ] Fri — Document limits interface
+- [x] Tue — Tested compiled plugins against limits: tight custom fuel/memory caps bite at runtime, and limits survive the artifact round trip (`tests/test_resource_limits_v3.py`)
+- [x] Wed — Compiler emits a non-fatal `source_near_size_limit` warning when source nears the byte cap; surfaced on the compile result, CLI stderr, and API response
+- [x] Thu — Regression-tested the compiler changes: warning threshold boundary, hard cap still rejects, warnings compose with `resource_limits`, manifest shape unchanged (`tests/test_compiler_warnings_v3.py`)
+- [x] Fri — Documented the limits interface (`docs/08-week3-limits-interface.md`)
