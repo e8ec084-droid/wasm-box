@@ -10,6 +10,7 @@ export const INITIAL_MODULES: WasmModuleItem[] = [
     description: 'CPython compiled to WebAssembly with WASI system call virtualization and isolated memory bounds.',
     isDefault: true,
   },
+  
   {
     id: 'mod-2',
     name: 'micropython_core.wasm',
