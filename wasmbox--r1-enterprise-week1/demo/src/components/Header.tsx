@@ -9,6 +9,7 @@ interface HeaderProps {
   activeExecutionsCount: number;
 }
 
+
 export const Header: React.FC<HeaderProps> = ({
   currentPage,
   darkMode,
