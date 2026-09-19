@@ -25,6 +25,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import re
 import shutil
 import sys
 import zipfile
@@ -88,6 +89,24 @@ MAX_SOURCE_BYTES = 256 * 1024  # 256 KB — generous for a plugin, cheap to reje
 # automatically instead of going stale if MAX_SOURCE_BYTES ever changes.
 SOURCE_SIZE_WARNING_RATIO = 0.8
 
+# Week 4 (Mon) hardening. A plugin name is used verbatim as a directory name
+# and an artifact filename, so it is restricted to a short, path-neutral
+# alphabet. `compiler.py` owns this rule; `api.py` reuses the same pattern on
+# its request model so the two validation layers can never drift apart.
+PLUGIN_NAME_PATTERN = r"[A-Za-z0-9_-]{1,64}"
+_PLUGIN_NAME_RE = re.compile(PLUGIN_NAME_PATTERN)
+_FORMAT_VERSION_RE = re.compile(r"\d+\.\d+")
+
+# Keys every plugin manifest must carry for the runner/packager to trust it.
+REQUIRED_MANIFEST_KEYS: frozenset[str] = frozenset(
+    {"name", "entrypoint", "source_sha256", "runtime", "format_version"}
+)
+
+# A packaged plugin is one manifest plus one source file, so it legitimately
+# decompresses to a little over MAX_SOURCE_BYTES. Anything beyond this is
+# treated as a decompression bomb and refused instead of extracted.
+MAX_ARTIFACT_UNCOMPRESSED_BYTES = 4 * MAX_SOURCE_BYTES
+
 
 # ---------------------------------------------------------------------------
 # Validation errors — each with a stable error_code for structured API responses
@@ -127,6 +146,20 @@ class DisallowedImportError(PluginValidationError):
 
 class ResourceLimitError(PluginValidationError):
     error_code = "invalid_resource_limits"
+
+
+class InvalidPluginNameError(PluginValidationError):
+    error_code = "invalid_plugin_name"
+
+
+class ArtifactIntegrityError(PluginValidationError):
+    """Raised when a plugin directory or `.wasmboxpkg` artifact is malformed.
+
+    Covers missing/mismatched manifest fields and archives whose members would
+    escape the extraction directory (zip-slip) or expand unreasonably large.
+    """
+
+    error_code = "invalid_artifact"
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +205,16 @@ class ResourceLimitBounds:
 
     min_value: int
     max_value: int
+
+
+@dataclass(frozen=True)
+class ParsedManifest:
+    """The manifest fields the packager/unpacker rely on, already validated."""
+
+    name: str
+    entrypoint: str
+    format_version: str
+    major_version: int
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +265,33 @@ def validate_resource_limits(
         merged[key] = value
 
     return merged
+
+
+def validate_plugin_name(plugin_name: object) -> str:
+    """Return `plugin_name` if it is a safe plugin name, otherwise raise.
+
+    Every compile entrypoint funnels through here, closing the path-traversal
+    hole left open by trusting a tenant-supplied name as a directory/filename.
+
+    Args:
+        plugin_name: Candidate name from the CLI, the API, or a manifest.
+
+    Returns:
+        The name unchanged, narrowed to `str`.
+
+    Raises:
+        InvalidPluginNameError: If the name is not a string matching
+            PLUGIN_NAME_PATTERN.
+    """
+    is_valid_name = (
+        isinstance(plugin_name, str)
+        and _PLUGIN_NAME_RE.fullmatch(plugin_name) is not None
+    )
+    if not is_valid_name:
+        raise InvalidPluginNameError(
+            f"Plugin name must match {PLUGIN_NAME_PATTERN}, got {plugin_name!r}"
+        )
+    return plugin_name
 
 
 def _extract_import_names(node: ast.Import | ast.ImportFrom) -> list[str]:
@@ -311,6 +381,7 @@ def compile_source(
         A CompiledPlugin describing the created plugin directory and its manifest.
 
     Raises:
+        InvalidPluginNameError: If plugin_name is unsafe as a directory/filename.
         SourceTooLargeError: If source_bytes exceeds MAX_SOURCE_BYTES.
         EncodingError: If source_bytes is not valid UTF-8.
         EmptySourceError: If source is empty or whitespace-only.
@@ -318,6 +389,7 @@ def compile_source(
         DisallowedImportError: If a banned import is detected.
         ResourceLimitError: If resource_limits contains invalid values.
     """
+    plugin_name = validate_plugin_name(plugin_name)
     limits = validate_resource_limits(resource_limits)
 
     _validate_source_size(source_bytes)
@@ -382,23 +454,25 @@ def package_artifact(plugin_dir: Path, artifact_dir: Path) -> Path:
 
     Raises:
         FileNotFoundError: If plugin_dir does not contain a manifest.json.
+        ArtifactIntegrityError: If the manifest is malformed or its entrypoint
+            is unsafe/missing on disk.
     """
     plugin_dir = Path(plugin_dir)
     artifact_dir = Path(artifact_dir)
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
     manifest_path = plugin_dir / MANIFEST_FILENAME
-    if not manifest_path.exists():
-        raise FileNotFoundError(
-            f"{plugin_dir} is not a compiled plugin (missing manifest.json)"
+    manifest = _load_manifest_file(manifest_path)
+    entrypoint_path = plugin_dir / manifest.entrypoint
+    if not entrypoint_path.is_file():
+        raise ArtifactIntegrityError(
+            f"Manifest entrypoint {manifest.entrypoint!r} is missing from {plugin_dir}"
         )
 
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    artifact_path = artifact_dir / f"{manifest['name']}{ARTIFACT_SUFFIX}"
-
+    artifact_path = artifact_dir / f"{manifest.name}{ARTIFACT_SUFFIX}"
     with zipfile.ZipFile(artifact_path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.write(manifest_path, arcname=MANIFEST_FILENAME)
-        zf.write(plugin_dir / manifest["entrypoint"], arcname=manifest["entrypoint"])
+        zf.write(entrypoint_path, arcname=manifest.entrypoint)
 
     return artifact_path
 
@@ -421,20 +495,20 @@ def unpack_artifact(artifact_path: Path, output_dir: Path) -> Path:
     output_dir = Path(output_dir)
 
     with zipfile.ZipFile(artifact_path, "r") as zf:
-        manifest = json.loads(zf.read(MANIFEST_FILENAME))
+        manifest = _load_archive_manifest(zf)
 
         # Forward-compatibility guard: refuse artifacts produced by a newer
         # format we don't understand yet. Older formats (e.g. 1.0, without
         # resource_limits) still unpack fine; the runner applies defaults.
-        version = manifest.get("format_version", PLUGIN_FORMAT_VERSION)
-        current_major = int(PLUGIN_FORMAT_VERSION.split(".")[0])
-        artifact_major = int(version.split(".")[0])
-        if artifact_major > current_major:
+        current_major = _current_format_major()
+        if manifest.major_version > current_major:
             raise ValueError(
-                f"Artifact format {version} is newer than supported {PLUGIN_FORMAT_VERSION}"
+                f"Artifact format {manifest.format_version} is newer than "
+                f"supported {PLUGIN_FORMAT_VERSION}"
             )
 
-        plugin_dir = output_dir / manifest["name"]
+        plugin_dir = output_dir / manifest.name
+        _verify_archive(zf, plugin_dir)
         if plugin_dir.exists():
             shutil.rmtree(plugin_dir)
         plugin_dir.mkdir(parents=True)
@@ -446,6 +520,126 @@ def unpack_artifact(artifact_path: Path, output_dir: Path) -> Path:
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
+
+
+def _current_format_major() -> int:
+    """Return the major component of the format version we produce."""
+    return int(PLUGIN_FORMAT_VERSION.split(".", maxsplit=1)[0])
+
+
+def _require_format_version(value: object) -> str:
+    """Return a `"<major>.<minor>"` version string, else raise."""
+    is_valid_version = (
+        isinstance(value, str) and _FORMAT_VERSION_RE.fullmatch(value) is not None
+    )
+    if not is_valid_version:
+        raise ArtifactIntegrityError(f"Malformed format_version: {value!r}")
+    return value
+
+
+def _validate_entrypoint_name(entrypoint: object) -> str:
+    """Return a bare `<name>.py` entrypoint filename, else raise.
+
+    The entrypoint is joined onto a directory and stored inside the artifact,
+    so it must not contain directories, traversal segments, or an absolute path.
+    """
+    is_bare_python_file = (
+        isinstance(entrypoint, str)
+        and entrypoint.endswith(".py")
+        and Path(entrypoint).name == entrypoint
+    )
+    if not is_bare_python_file:
+        raise ArtifactIntegrityError(
+            f"Manifest entrypoint must be a bare .py filename, got {entrypoint!r}"
+        )
+    return entrypoint
+
+
+def _parse_manifest(raw_manifest: object) -> ParsedManifest:
+    """Validate a decoded manifest's shape and return its trusted fields.
+
+    Raises:
+        ArtifactIntegrityError: If the manifest is not an object, is missing a
+            required key, or carries an unsafe name/entrypoint/version.
+    """
+    if not isinstance(raw_manifest, dict):
+        raise ArtifactIntegrityError("Manifest must be a JSON object")
+
+    missing_keys = sorted(REQUIRED_MANIFEST_KEYS - set(raw_manifest))
+    if missing_keys:
+        raise ArtifactIntegrityError(
+            f"Manifest is missing required key(s): {missing_keys}"
+        )
+
+    format_version = _require_format_version(raw_manifest["format_version"])
+    return ParsedManifest(
+        name=validate_plugin_name(raw_manifest["name"]),
+        entrypoint=_validate_entrypoint_name(raw_manifest["entrypoint"]),
+        format_version=format_version,
+        major_version=int(format_version.split(".", maxsplit=1)[0]),
+    )
+
+
+def _load_manifest_file(manifest_path: Path) -> ParsedManifest:
+    """Read and validate a plugin directory's `manifest.json`.
+
+    Raises:
+        FileNotFoundError: If the manifest file does not exist.
+        ArtifactIntegrityError: If the manifest is unreadable or malformed.
+    """
+    if not manifest_path.exists():
+        raise FileNotFoundError(
+            f"{manifest_path.parent} is not a compiled plugin (missing {MANIFEST_FILENAME})"
+        )
+    try:
+        raw_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        raise ArtifactIntegrityError(f"Manifest is not valid JSON: {exc}") from exc
+    return _parse_manifest(raw_manifest)
+
+
+def _load_archive_manifest(archive: zipfile.ZipFile) -> ParsedManifest:
+    """Read and validate the manifest stored inside an artifact archive.
+
+    Raises:
+        ArtifactIntegrityError: If the archive has no readable or malformed manifest.
+    """
+    try:
+        raw_manifest = json.loads(archive.read(MANIFEST_FILENAME))
+    except (KeyError, ValueError) as exc:
+        raise ArtifactIntegrityError(
+            f"Artifact has no readable {MANIFEST_FILENAME}: {exc}"
+        ) from exc
+    return _parse_manifest(raw_manifest)
+
+
+def _verify_archive(archive: zipfile.ZipFile, destination: Path) -> None:
+    """Reject unsafe artifacts before any bytes are written to disk.
+
+    Guards against two classes of hostile archive:
+
+    1. Zip-slip — a member path that resolves outside `destination`.
+    2. Decompression bombs — an archive whose members expand past
+       MAX_ARTIFACT_UNCOMPRESSED_BYTES.
+
+    Raises:
+        ArtifactIntegrityError: If any member escapes `destination` or the
+            archive expands too large.
+    """
+    members = archive.infolist()
+    uncompressed_total = sum(member.file_size for member in members)
+    if uncompressed_total > MAX_ARTIFACT_UNCOMPRESSED_BYTES:
+        raise ArtifactIntegrityError(
+            f"Artifact expands to {uncompressed_total} bytes, above the "
+            f"{MAX_ARTIFACT_UNCOMPRESSED_BYTES} byte limit"
+        )
+
+    base_dir = Path(destination).resolve()
+    for member in members:
+        if not (base_dir / member.filename).resolve().is_relative_to(base_dir):
+            raise ArtifactIntegrityError(
+                f"Artifact member {member.filename!r} escapes {base_dir}"
+            )
 
 
 def _validate_source_size(source_bytes: bytes) -> None:

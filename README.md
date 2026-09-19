@@ -29,7 +29,7 @@ curl -X POST http://127.0.0.1:8000/plugins \
   -d '{"name": "greet", "source": "print(2 + 2)"}'
 curl -O -J http://127.0.0.1:8000/plugins/greet/artifact
 
-# Full test suite (72 tests: Week 1 + Week 2 + Week 3)
+# Full test suite (96 tests: Week 1 + Week 2 + Week 3 + Week 4)
 python3 -m pytest tests/ -v
 ```
 
@@ -48,6 +48,7 @@ Expected API response:
 
 ```
 src/compiler.py       - validates + packages untrusted source, .wasmboxpkg artifacts
+src/compile_cache.py  - content-addressed cache for repeated compilations (Week 4)
 src/api.py            - FastAPI endpoint wrapping the compiler (Week 2)
 src/runner.py         - loads the shared runtime, executes a plugin sandboxed
 src/host_bridge/      - WASM host API bridge (registry, logger, validator)
@@ -78,6 +79,12 @@ docs/                 - toolchain research + pipeline/packaging design docs
 - [`docs/08-week3-limits-interface.md`](docs/08-week3-limits-interface.md) —
   the complete Week 3 interface: declaring limits, enforcement, compiler
   warnings for oversized code, and the API contract.
+- [`docs/09-week4-hardening-and-caching.md`](docs/09-week4-hardening-and-caching.md) —
+  Week 4 pipeline hardening (name/manifest/archive validation, zip-slip and
+  decompression-bomb guards) and the content-addressed compilation cache.
+- [`docs/10-week4-presentation-script.md`](docs/10-week4-presentation-script.md) —
+  the 5–6 minute walkthrough script for presenting the Week 4 work (timed beats,
+  screen choreography, numbers to have ready, Q&A prep).
 
 ## Status: Week 1 (Compiler Engineer track)
 
@@ -102,3 +109,11 @@ docs/                 - toolchain research + pipeline/packaging design docs
 - [x] Wed — Compiler emits a non-fatal `source_near_size_limit` warning when source nears the byte cap; surfaced on the compile result, CLI stderr, and API response
 - [x] Thu — Regression-tested the compiler changes: warning threshold boundary, hard cap still rejects, warnings compose with `resource_limits`, manifest shape unchanged (`tests/test_compiler_warnings_v3.py`)
 - [x] Fri — Documented the limits interface (`docs/08-week3-limits-interface.md`)
+
+## Status: Week 4 (Refine & Polish track)
+
+- [x] Mon — Finalized compiler pipeline hardening: plugin-name + manifest validation, and zip-slip / decompression-bomb guards on artifacts (`docs/09-week4-hardening-and-caching.md`)
+- [x] Tue — Added a content-addressed LRU cache for repeated compilations (`src/compile_cache.py`), wired into `POST /plugins`
+- [ ] Wed — Final compiler testing
+- [ ] Thu — Bug fixes
+- [ ] Fri — Final compiler documentation
