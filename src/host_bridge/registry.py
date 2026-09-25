@@ -1,33 +1,60 @@
-"""Whitelisted Host Function Registry (v1 API Contract)."""
+"""Central Whitelisted Host Function Registry."""
 
-from typing import Callable, Dict
+from typing import Any, Callable, Dict
+from src.host_bridge.database import DatabaseBridge
+from src.host_bridge.logger import secure_log
 from src.host_bridge.validator import HostFunctionValidator
+from src.host_bridge.webhook import WebhookBridge
 
 
 class HostFunctionRegistry:
-    """Manages secure bindings and whitelisted function routing for Wasmtime."""
+    """Manages whitelisted host functions, input boundary checks, and runtime bindings."""
 
-    def __init__(self) -> None:
+    def __init__(self, db_bridge: DatabaseBridge | None = None) -> None:
+        """Initializes the registry with supported services."""
+        self._db_bridge = db_bridge or DatabaseBridge()
         self._registry: Dict[str, Callable[..., Any]] = {}
-        self._register_v1_defaults()
+        self._register_whitelist()
 
-    def _register_v1_defaults(self) -> None:
-        """Registers approved v1 whitelisted functions with validation wrappers."""
-        self._registry["host_log"] = self.whitelisted_log
-        self._registry["host_get_metric"] = self.whitelisted_get_metric
+    def _register_whitelist(self) -> None:
+        """Binds verified host call endpoints."""
+        self._registry["host_log"] = self.bridge_log
+        self._registry["host_get_metric"] = self.bridge_get_metric
+        self._registry["host_db_write"] = self.bridge_db_write
+        self._registry["host_trigger_webhook"] = self.bridge_trigger_webhook
 
-    def whitelisted_log(self, message: str) -> None:
-        """Whitelisted host logging function with strict string validation."""
-        clean_message = HostFunctionValidator.validate_string(message, max_length=512)
-        print(f"[WasmBox-Guest-Log]: {clean_message}")
+    def bridge_log(self, message: Any) -> None:
+        """Logging endpoint with string boundary checking."""
+        clean_msg = HostFunctionValidator.validate_string(message, max_length=512, param_name="message")
+        secure_log(clean_msg)
 
-    def whitelisted_get_metric(self, code: int) -> int:
-        """Whitelisted metric getter with bounds checking."""
-        valid_code = HostFunctionValidator.validate_integer(code, min_val=0, max_val=99)
+    def bridge_get_metric(self, metric_code: Any) -> int:
+        """System metric query endpoint."""
+        valid_code = HostFunctionValidator.validate_integer(
+            metric_code, min_val=0, max_val=99, param_name="metric_code"
+        )
         return valid_code * 42
 
-    def get_function(self, name: str) -> Callable[..., Any]:
-        """Retrieves a whitelisted function or denies execution if unauthorized."""
-        if name not in self._registry:
-            raise PermissionError(f"Access Denied: Function '{name}' is not whitelisted in v1 API.")
-        return self._registry[name]
+    def bridge_db_write(self, table: Any, row_id: Any, payload: Any, caller_role: Any) -> int:
+        """Authorized database write endpoint."""
+        return self._db_bridge.write_row(table, row_id, payload, caller_role)
+
+    def bridge_trigger_webhook(self, url: Any, event_type: Any, data_json: Any, caller_role: Any) -> int:
+        """Authorized webhook dispatch endpoint."""
+        return WebhookBridge.trigger_webhook(url, event_type, data_json, caller_role)
+
+    def get_function(self, func_name: str) -> Callable[..., Any]:
+        """Resolves an approved function from the whitelist.
+
+        Args:
+            func_name: Requested host function identifier.
+
+        Returns:
+            The callable wrapper.
+
+        Raises:
+            PermissionError: If the function is not whitelisted.
+        """
+        if func_name not in self._registry:
+            raise PermissionError(f"Access Denied: Function '{func_name}' is not in approved v1 API contract")
+        return self._registry[func_name]
