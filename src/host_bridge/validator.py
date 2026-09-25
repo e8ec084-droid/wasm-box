@@ -1,112 +1,104 @@
-"""
-WASM Host Function Argument Validator.
+"""Boundary input validation and type sanitization layer."""
 
-Provides validation helpers for host functions that are bridged into WASM
-guest modules. Ensures that arguments received from WASM memory are sensible
-before Python code acts on them.
-"""
-
-from __future__ import annotations
-
-from typing import Callable
-
-# Maximum reasonable message length from a WASM guest (1 MB).
-MAX_MESSAGE_LENGTH = 1024 * 1024
-
-# Valid range for pointer offsets into WASM linear memory.
-MIN_POINTER = 0
-MAX_POINTER = 2**31 - 1  # i32 max, reasonable upper bound
+import json
+from typing import Any, Dict
+from urllib.parse import urlparse
 
 
-class HostFunctionValidationError(ValueError):
-    """Raised when a host function receives invalid arguments from WASM."""
+class HostFunctionValidator:
+    """Validates and sanitizes parameters passed across the WASM-to-host boundary."""
 
+    @staticmethod
+    def validate_string(value: Any, max_length: int = 512, param_name: str = "parameter") -> str:
+        """Asserts input is a valid string within length bounds.
 
-def validate_memory_access(
-    ptr: int,
-    length: int,
-    max_memory: int | None = None,
-) -> None:
-    """Validate that a memory access (ptr, length) is within safe bounds.
+        Args:
+            value: Guest-supplied input.
+            max_length: Maximum permitted byte/character length.
+            param_name: Parameter label for error diagnostics.
 
-    Args:
-        ptr: Starting offset in WASM linear memory.
-        length: Number of bytes to read.
-        max_memory: Optional upper bound on WASM memory size. If None,
-            only pointer non-negativity and length limits are checked.
+        Returns:
+            The validated string.
 
-    Raises:
-        HostFunctionValidationError: If the access is out of bounds,
-            negative, or would read an unreasonable amount of data.
-    """
-    if ptr < MIN_POINTER:
-        raise HostFunctionValidationError(
-            f"Memory pointer {ptr} is negative"
-        )
+        Raises:
+            TypeError: If the input is not a string.
+            ValueError: If the string exceeds max_length or contains null bytes.
+        """
+        if not isinstance(value, str):
+            raise TypeError(f"Invalid type for {param_name}: expected str, got {type(value).__name__}")
+        if "\x00" in value:
+            raise ValueError(f"Null byte detected in string {param_name}")
+        if len(value) > max_length:
+            raise ValueError(f"{param_name} length ({len(value)}) exceeds maximum allowed ({max_length})")
+        return value
 
-    if length < 0:
-        raise HostFunctionValidationError(
-            f"Memory length {length} is negative"
-        )
+    @staticmethod
+    def validate_integer(
+        value: Any,
+        min_val: int = 0,
+        max_val: int = 1_000_000,
+        param_name: str = "integer_parameter",
+    ) -> int:
+        """Asserts input is an integer within safe numeric limits.
 
-    if length > MAX_MESSAGE_LENGTH:
-        raise HostFunctionValidationError(
-            f"Memory length {length} exceeds maximum allowed {MAX_MESSAGE_LENGTH}"
-        )
+        Args:
+            value: Guest-supplied input.
+            min_val: Inclusive lower bound.
+            max_val: Inclusive upper bound.
+            param_name: Parameter label for error diagnostics.
 
-    if max_memory is not None and ptr + length > max_memory:
-        raise HostFunctionValidationError(
-            f"Memory access [{ptr}:{ptr + length}] exceeds WASM memory size {max_memory}"
-        )
+        Returns:
+            The validated integer.
 
+        Raises:
+            TypeError: If the input is not a strict integer.
+            ValueError: If the value is outside [min_val, max_val].
+        """
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise TypeError(f"Invalid type for {param_name}: expected int, got {type(value).__name__}")
+        if not (min_val <= value <= max_val):
+            raise ValueError(f"{param_name} ({value}) out of bounds [{min_val}, {max_val}]")
+        return value
 
-def validate_log_arguments(
-    level: int,
-    ptr: int,
-    length: int,
-) -> None:
-    """Validate arguments for a host_log function call.
+    @staticmethod
+    def validate_json_payload(raw_json: Any, max_length: int = 4096) -> Dict[str, Any]:
+        """Parses and validates a JSON string.
 
-    Args:
-        level: Log level code from WASM guest.
-        ptr: Message pointer in WASM linear memory.
-        length: Message length in bytes.
+        Args:
+            raw_json: Stringified JSON payload.
+            max_length: Upper limit for JSON payload size.
 
-    Raises:
-        HostFunctionValidationError: If any argument is invalid.
-    """
-    if not isinstance(level, int) or level < 0:
-        raise HostFunctionValidationError(
-            f"Log level must be a non-negative integer, got {level!r}"
-        )
+        Returns:
+            Parsed JSON dictionary.
 
-    validate_memory_access(ptr, length)
-
-
-def create_validated_host_function(
-    func: Callable,
-    validator: Callable[..., None],
-) -> Callable:
-    """Wrap a host function with argument validation.
-
-    The validator is called before the underlying function. If validation
-    fails, the wrapper returns -1 (WASM error convention) instead of calling
-    the underlying function.
-
-    Args:
-        func: The underlying host function to wrap.
-        validator: A callable that validates arguments and raises
-            HostFunctionValidationError on invalid input.
-
-    Returns:
-        A wrapped function that validates before delegating.
-    """
-
-    def validated_wrapper(*args, **kwargs):
+        Raises:
+            TypeError: If input is not a string.
+            ValueError: If input is malformed or exceeds max length.
+        """
+        validated_str = HostFunctionValidator.validate_string(raw_json, max_length, "json_payload")
         try:
-            validator(*args, **kwargs)
-        except HostFunctionValidationError:
-            return -1
-        return func(*args, **kwargs)
+            parsed = json.loads(validated_str)
+            if not isinstance(parsed, dict):
+                raise ValueError("JSON root must be an object/dictionary")
+            return parsed
+        except json.JSONDecodeError as err:
+            raise ValueError(f"Malformed JSON payload: {err.msg}") from err
 
-    return validated_wrapper
+    @staticmethod
+    def validate_url(url: Any) -> str:
+        """Validates that a URL is well-formed and uses HTTP or HTTPS.
+
+        Args:
+            url: Destination URL string.
+
+        Returns:
+            The validated URL string.
+
+        Raises:
+            ValueError: If the URL scheme or network address is invalid.
+        """
+        validated_str = HostFunctionValidator.validate_string(url, max_length=2048, param_name="url")
+        parsed = urlparse(validated_str)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError(f"Invalid URL structure or scheme: {validated_str}")
+        return validated_str
