@@ -1,103 +1,60 @@
-"""
-WASM Host API Bridge — Function Registry.
+"""Central Whitelisted Host Function Registry."""
 
-Provides utilities for registering authorized host functions into the WASM
-linker so that guest modules can call back into the Python host.
-
-This is a Week 4+ feature. Until then, the runner will not register any
-host functions and plugins run with pure sandbox isolation.
-"""
-
-from __future__ import annotations
-
-from typing import Callable
-
-from wasmtime import FuncType, Linker, Store, ValType
-
-from host_bridge.logger import create_log_function
-from host_bridge.validator import (
-    HostFunctionValidationError,
-    create_validated_host_function,
-    validate_log_arguments,
-)
+from typing import Any, Callable, Dict
+from src.host_bridge.database import DatabaseBridge
+from src.host_bridge.logger import secure_log
+from src.host_bridge.validator import HostFunctionValidator
+from src.host_bridge.webhook import WebhookBridge
 
 
-# ---------------------------------------------------------------------------
-# Types
-# ---------------------------------------------------------------------------
+class HostFunctionRegistry:
+    """Manages whitelisted host functions, input boundary checks, and runtime bindings."""
 
-# WASM signature for host_log: (i32 level, i32 ptr, i32 len) -> i32
-HOST_LOG_SIGNATURE = FuncType(
-    [ValType.i32(), ValType.i32(), ValType.i32()],
-    [ValType.i32()],
-)
+    def __init__(self, db_bridge: DatabaseBridge | None = None) -> None:
+        """Initializes the registry with supported services."""
+        self._db_bridge = db_bridge or DatabaseBridge()
+        self._registry: Dict[str, Callable[..., Any]] = {}
+        self._register_whitelist()
 
+    def _register_whitelist(self) -> None:
+        """Binds verified host call endpoints."""
+        self._registry["host_log"] = self.bridge_log
+        self._registry["host_get_metric"] = self.bridge_get_metric
+        self._registry["host_db_write"] = self.bridge_db_write
+        self._registry["host_trigger_webhook"] = self.bridge_trigger_webhook
 
-# ---------------------------------------------------------------------------
-# Registration
-# ---------------------------------------------------------------------------
+    def bridge_log(self, message: Any) -> None:
+        """Logging endpoint with string boundary checking."""
+        clean_msg = HostFunctionValidator.validate_string(message, max_length=512, param_name="message")
+        secure_log(clean_msg)
 
+    def bridge_get_metric(self, metric_code: Any) -> int:
+        """System metric query endpoint."""
+        valid_code = HostFunctionValidator.validate_integer(
+            metric_code, min_val=0, max_val=99, param_name="metric_code"
+        )
+        return valid_code * 42
 
-def register_host_functions(
-    linker: Linker,
-    store: Store,
-    log_func: Callable[[int, int, int], int] | None = None,
-) -> None:
-    """Register authorized host functions into the WASM linker.
+    def bridge_db_write(self, table: Any, row_id: Any, payload: Any, caller_role: Any) -> int:
+        """Authorized database write endpoint."""
+        return self._db_bridge.write_row(table, row_id, payload, caller_role)
 
-    Currently registers only `host_log`, which allows guest modules to emit
-    log messages that are bridged to Python's logging system.
+    def bridge_trigger_webhook(self, url: Any, event_type: Any, data_json: Any, caller_role: Any) -> int:
+        """Authorized webhook dispatch endpoint."""
+        return WebhookBridge.trigger_webhook(url, event_type, data_json, caller_role)
 
-    Args:
-        linker: The Wasmtime linker instance to register functions on.
-        store: The Wasmtime store (used for context if needed).
-        log_func: Optional custom log function. When None, a default logger
-            bridge is created via `create_log_function()`.
+    def get_function(self, func_name: str) -> Callable[..., Any]:
+        """Resolves an approved function from the whitelist.
 
-    Raises:
-        HostFunctionValidationError: If the provided log_func doesn't match
-            the expected signature.
-    """
-    if log_func is None:
-        log_func = create_log_function()
+        Args:
+            func_name: Requested host function identifier.
 
-    # Validate the function signature matches what we expect.
-    _validate_log_function_signature(log_func)
+        Returns:
+            The callable wrapper.
 
-    # Create a validated wrapper that checks arguments before delegating.
-    validated_log = create_validated_host_function(log_func, validate_log_arguments)
-
-    # Bind the Python function to the "env" module in the WASM guest.
-    linker.define_func(
-        "env",
-        "host_log",
-        HOST_LOG_SIGNATURE,
-        validated_log,
-    )
-
-
-def _validate_log_function_signature(func: Callable) -> None:
-    """Ensure a log function accepts (int, int, int) -> int.
-
-    This is a lightweight structural check. In production we'd use
-    typing.get_type_hints or inspect.signature, but for WASM host
-    functions the convention is clear enough to document here.
-
-    Args:
-        func: The candidate log function.
-
-    Raises:
-        HostFunctionValidationError: If the function doesn't match
-            the expected (i32, i32, i32) -> i32 signature.
-    """
-    try:
-        # Quick smoke test with dummy values.
-        result = func(0, 0, 1)
-        if not isinstance(result, int):
-            raise HostFunctionValidationError(
-                f"host_log must return int, got {type(result).__name__}"
-            )
-    except TypeError as exc:
-        raise HostFunctionValidationError(
-            f"host_log must accept (int, int, int), got {exc}"
-        ) from exc
+        Raises:
+            PermissionError: If the function is not whitelisted.
+        """
+        if func_name not in self._registry:
+            raise PermissionError(f"Access Denied: Function '{func_name}' is not in approved v1 API contract")
+        return self._registry[func_name]
