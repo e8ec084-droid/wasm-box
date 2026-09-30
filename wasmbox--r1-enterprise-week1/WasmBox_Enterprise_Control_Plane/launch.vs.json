@@ -1,0 +1,12 @@
+{
+  "version": "0.2.1",
+  "defaults": {},
+  "configurations": [
+    {
+      "type": "default",
+      "project": "package.json",
+      "name": "npm run dev (Vite Dev Server)",
+      "args": ["run", "dev"]
+    }
+  ]
+}
